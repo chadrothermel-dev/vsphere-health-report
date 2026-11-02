@@ -96,6 +96,7 @@ function Get-VhVxRailInventory {
         [switch]$IncludeIdrac,
         [switch]$KeepRaw
     )
+    Set-StrictMode -Off   # API responses vary by VxRail release; fields are read with Get-VhProp
     $errors = [System.Collections.Generic.List[string]]::new()
     $call = {
         param($path)

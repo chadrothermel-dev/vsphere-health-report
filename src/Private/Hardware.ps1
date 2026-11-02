@@ -36,6 +36,7 @@ function Get-VhHostHardware {
         [hashtable]$DvPortGroupNames = @{},
         [switch]$UseEsxcli
     )
+    Set-StrictMode -Off   # live API data: missing sub-objects are normal, values are coerced below
     $h = $HostView
     $sys = $h.Hardware.SystemInfo
     $ids = @(Get-VhSafe { $sys.OtherIdentifyingInfo } @())

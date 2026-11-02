@@ -86,11 +86,19 @@ try {
         $connections = @(Connect-VhServer -Server $targets -Credential $Credential `
                 -AllLinked:([bool]$settings.Connection.AllLinked) -InvalidCertificateAction $settings.Connection.InvalidCertificateAction)
         $useEsxcli = $asBuilt -and $settings.AsBuilt -and [bool]$settings.AsBuilt.UseEsxcli
-        $perVc = foreach ($c in $connections) {
-            Write-Host "Collecting inventory from $($c.Name) (vCenter $($c.Version))$(if ($asBuilt) { ' with hardware detail' })" -ForegroundColor Cyan
-            Get-VhInventory -Server $c -IncludeHardware:$asBuilt -UseEsxcli:$useEsxcli
+        if (-not $connections.Count) { throw "Could not connect to any vCenter Server ($($targets -join ', '))." }
+        $perVc = @(foreach ($c in $connections) {
+                Write-Host "Collecting inventory from $($c.Name) (vCenter $($c.Version))$(if ($asBuilt) { ' with hardware detail' })" -ForegroundColor Cyan
+                # Keep only the inventory object, in case anything else leaked into the pipeline
+                $inv = @(Get-VhInventory -Server $c -IncludeHardware:$asBuilt -UseEsxcli:$useEsxcli) |
+                    Where-Object { $_ -and $_.PSObject.Properties['vCenters'] } | Select-Object -Last 1
+                if ($inv) { $inv }
+                else { Write-Warning "No inventory was returned from $($c.Name). Re-run with -Verbose to see where collection stopped." }
+            })
+        if (-not $perVc.Count) {
+            throw "No inventory was collected from $(@($connections | ForEach-Object Name) -join ', '). See the errors/warnings above, or re-run with -Verbose."
         }
-        $inventory = Merge-VhInventory -Inventory @($perVc)
+        $inventory = Merge-VhInventory -Inventory $perVc
 
         # VxRail Manager API (clusters tagged with the VxRail-IP attribute, or listed in Settings.VxRail.Managers)
         $vx = $settings.VxRail

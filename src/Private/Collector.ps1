@@ -7,8 +7,15 @@
 
 function Get-VhSafe {
     # Evaluate a scriptblock, returning $Default on any error (missing API, privilege, etc.)
+    # or when it yields $null - so @(Get-VhSafe { $x.List } @()) is empty, never @($null).
+    # A $null default is never written to the pipeline: an unassigned Get-VhSafe call must not
+    # leak $null into the caller's output (that made Get-VhInventory return @($null, $inventory)).
     param([scriptblock]$Script, $Default = $null)
-    try { & $Script } catch { Write-Verbose "Collector: $($_.Exception.Message)"; $Default }
+    $r = $null
+    try { $r = & $Script }
+    catch { Write-Verbose "Collector: $($_.Exception.Message)" }
+    if ($null -ne $r) { $r }
+    elseif ($null -ne $Default) { $Default }
 }
 
 function Get-VhInventory {
@@ -26,6 +33,12 @@ function Get-VhInventory {
     )
 
     $vc = $Server.Name
+    # Live vSphere API objects are full of nulls (disconnected hosts, inaccessible VMs, unset
+    # config sections). Values are coerced explicitly below, so strict property checking here
+    # only turns a null into a lost host/VM - or an empty inventory.
+    Set-StrictMode -Off
+    $clusters = @(); $hosts = @(); $datastores = @(); $vms = @(); $dvSwitches = @(); $dvPortGroups = @()
+    $alarms = @(); $sessions = @(); $licenses = @(); $assignments = @()
     Write-Verbose "[$vc] Collecting service content"
     $si = Get-View ServiceInstance -Server $Server
     $about = $si.Content.About
@@ -388,7 +401,9 @@ function Get-VhInventory {
 
 function Merge-VhInventory {
     <# Combines per-vCenter inventories into one. #>
-    param([Parameter(Mandatory)][object[]]$Inventory)
+    param([Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Inventory)
+    $Inventory = @($Inventory | Where-Object { $_ -and $_.PSObject.Properties['vCenters'] })
+    if (-not $Inventory.Count) { throw 'No vCenter inventory was collected; nothing to report on.' }
     $props = 'vCenters', 'Clusters', 'Hosts', 'Datastores', 'Vms', 'DvSwitches', 'DvPortGroups', 'VxRail', 'Alarms', 'Sessions', 'Licenses', 'Assignments'
     $merged = [ordered]@{ CollectedAt = ($Inventory | Select-Object -First 1).CollectedAt }
     foreach ($p in $props) { $merged[$p] = @($Inventory | ForEach-Object { $_.$p } | Where-Object { $null -ne $_ }) }

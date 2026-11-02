@@ -311,7 +311,7 @@ tests/                           Pester tests
 ## Development
 
 ```powershell
-Invoke-Pester .\tests                                       # 52 tests, no vCenter or VxRail needed
+Invoke-Pester .\tests                                       # 57 tests, no vCenter or VxRail needed
 .\samples\New-SampleInventory.ps1 | Set-Content .\samples\sample-inventory.json
 .\Invoke-VsphereHealthReport.ps1 -Server vcsa01 -SaveInventory   # capture a real inventory to replay later
 ```
