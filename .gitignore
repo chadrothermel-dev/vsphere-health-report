@@ -1,0 +1,16 @@
+# Generated reports
+reports/
+
+# Credentials and environment-specific settings - never commit these
+*.cred.xml
+*creds*.xml
+config/Settings.*.psd1
+!config/Settings.sample.psd1
+
+# Captured live inventories can contain hostnames/IPs
+inventory.json
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
