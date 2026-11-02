@@ -12,7 +12,8 @@ function Get-VhProp {
     if ($null -eq $Object) { return $Default }
     foreach ($n in $Name) {
         $p = $Object.PSObject.Properties[$n]
-        if ($p -and $null -ne $p.Value -and $p.Value -ne '') { return $p.Value }
+        # 0 and $false are real values (slot 0, enclosure 0); only $null and '' count as missing
+        if ($p -and $null -ne $p.Value -and -not ($p.Value -is [string] -and $p.Value -eq '')) { return $p.Value }
     }
     $Default
 }
@@ -61,12 +62,17 @@ function Invoke-VhVxRailApi {
         }
     }
     try {
-        Invoke-RestMethod @params
+        # Assign then emit: Windows PowerShell 5.1 writes a JSON array as one object,
+        # emitting the variable enumerates it so callers always get individual items
+        $resp = Invoke-RestMethod @params
+        $resp
     }
     catch {
         $err = $_
         $status = Get-VhSafe { [int]$err.Exception.Response.StatusCode } 0
-        if ($status -eq 404) { return $null }
+        if ($status -eq 404) {
+            throw "VxRail API $Path on $Manager returned 404 (endpoint not found). The API may have changed in this VxRail release; run with -SaveInventory and compare with the VxRail API reference."
+        }
         throw "VxRail API $Path on $Manager failed: $($err.Exception.Message)"
     }
     finally {

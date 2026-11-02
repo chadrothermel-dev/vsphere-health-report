@@ -132,13 +132,19 @@ function Get-VhHealthSeverity {
 
 Register-VhCheck -Id 'VXR-001' -Category 'VxRail' -Severity 'Warning' `
     -Title 'VxRail Manager not reachable or API errors' `
-    -Description 'The VxRail Manager API could not be queried, so VxRail hardware checks for that cluster are incomplete.' `
-    -Remediation 'Confirm the VxRail Manager address (cluster attribute VxRail-IP or Settings.VxRail.Managers), that the account has a VxRail role, and that HTTPS 443 is reachable from the reporting server.' `
+    -Description 'The VxRail Manager API could not be queried, or returned no node data, so VxRail hardware checks for that cluster are incomplete. A reachable manager returning zero nodes usually means an endpoint changed in the installed VxRail release.' `
+    -Remediation 'Confirm the VxRail Manager address (cluster attribute VxRail-IP or Settings.VxRail.Managers), that the account has a VxRail role, and that HTTPS 443 is reachable. For missing node data, run with -SaveInventory and check the raw API responses.' `
     -Script {
     param($Inventory, $Settings)
     foreach ($v in @($Inventory.VxRail)) {
-        if (-not $v.Reachable -or @($v.Errors).Count) {
-            [pscustomobject]@{ Severity = if ($v.Reachable) { 'Info' } else { 'Warning' }; Cluster = $v.Cluster; Manager = $v.Manager; Reachable = $v.Reachable; Errors = (@($v.Errors) -join ' | ') }
+        $nodes = @($v.Nodes | Where-Object { $_ }).Count
+        $incomplete = $v.Reachable -and ($nodes -eq 0 -or ($v.NumberOfHosts -gt 0 -and $nodes -ne $v.NumberOfHosts))
+        if (-not $v.Reachable -or $incomplete -or @($v.Errors).Count) {
+            [pscustomobject]@{
+                Severity = if (-not $v.Reachable -or $incomplete) { 'Warning' } else { 'Info' }
+                Cluster = $v.Cluster; Manager = $v.Manager; Reachable = $v.Reachable
+                NodesReturned = $nodes; NodesExpected = $v.NumberOfHosts; Errors = (@($v.Errors) -join ' | ')
+            }
         }
     }
 }

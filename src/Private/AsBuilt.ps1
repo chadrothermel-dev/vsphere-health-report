@@ -66,12 +66,20 @@ function Get-VhAsBuiltTable {
                 [pscustomobject]@{ Host = $h.Name; Device = $d.CanonicalName; Vendor = $d.Vendor; Model = $d.Model; Firmware = $d.Firmware; CapacityGB = $d.CapacityGB; SSD = $d.Ssd; Local = $d.Local; vSAN = $d.VsanState; State = $d.State }
             }
         })
+    # Document-sized views (the workbook keeps the full per-host lists): local disks per host,
+    # shared LUNs once with the number of hosts that see them
+    $t['Local Disks'] = @($t['Disks'] | Where-Object Local | Select-Object Host, Device, Vendor, Model, Firmware, CapacityGB, SSD, vSAN, State)
+    $t['Shared LUNs'] = @($t['Disks'] | Where-Object { -not $_.Local } | Group-Object Device | ForEach-Object {
+            $d = $_.Group[0]
+            [pscustomobject]@{ Device = $d.Device; Vendor = $d.Vendor; Model = $d.Model; CapacityGB = $d.CapacityGB; SSD = $d.SSD; Hosts = $_.Count }
+        })
     $t['PCI Devices'] = @(foreach ($h in $hwHosts) {
             foreach ($d in @($h.Hardware.PciDevices)) { if ($d) { [pscustomobject]@{ Host = $h.Name; Address = $d.Id; Class = $d.Class; Vendor = $d.Vendor; Device = $d.Device } } }
         })
     $t['Hardware Sensors'] = @(foreach ($h in $hwHosts) {
             foreach ($s in @($h.Hardware.Sensors)) { if ($s) { [pscustomobject]@{ Host = $h.Name; Sensor = $s.Name; Type = $s.Type; Reading = $s.Reading; Health = $s.Health } } }
         })
+    $t['Sensors Not Normal'] = @($t['Hardware Sensors'] | Where-Object { $_.Health -and $_.Health -ne 'green' })
     $t['Distributed Switches'] = @($Inventory.DvSwitches | ForEach-Object { $_ | Select-Object vCenter, Name, Version, Mtu, Uplinks, Hosts, Nioc, Discovery })
     $t['Distributed Port Groups'] = @($Inventory.DvPortGroups | ForEach-Object {
             [pscustomobject]@{ vCenter = $_.vCenter; Switch = $_.Switch; PortGroup = $_.Name; VLAN = Get-VhProp $_ 'VlanId' ''; Binding = $_.BindingType; Ports = $_.NumPorts; VMs = $_.ConnectedVms }
@@ -172,12 +180,12 @@ function ConvertTo-VhAsBuiltHtml {
         & $addSection 'hostdetail' 'Host hardware detail' 'Per-host physical NICs, VMkernel adapters, storage adapters, disks and hardware sensors.' @()
     }
     & $addSection 'network' 'Networking' 'Distributed and standard switches, port groups and VLANs.' @('Distributed Switches', 'Distributed Port Groups', 'Standard Switches', 'Physical NICs', 'VMkernel Adapters')
-    & $addSection 'storage' 'Storage' 'Datastores, storage adapters, local/vSAN disks.' @('Datastores', 'Storage Adapters', 'Disks')
+    & $addSection 'storage' 'Storage' 'Datastores, storage adapters, local/vSAN disks and shared LUNs (each LUN listed once with the number of hosts that see it).' @('Datastores', 'Storage Adapters', 'Local Disks', 'Shared LUNs')
     if ($tables.Contains('VxRail Systems')) {
         & $addSection 'vxrail' 'Dell VxRail' 'Data from the VxRail Manager API: system, installed components, nodes, firmware, disks, boot devices, NICs and power supplies.' @('VxRail Systems', 'VxRail Components', 'VxRail Chassis', 'VxRail Nodes', 'VxRail Firmware', 'VxRail Disks', 'VxRail Boot Devices', 'VxRail NICs', 'VxRail Power Supplies')
     }
     if ($tables.Contains('Virtual Machines')) { & $addSection 'vms' 'Virtual machines' 'Virtual machine inventory (templates and excluded VMs omitted).' @('Virtual Machines') }
-    if ($tables.Contains('PCI Devices') -or $tables.Contains('Hardware Sensors')) { & $addSection 'appendix' 'Appendix: PCI devices and sensors' 'Full PCI device (storage, network, GPU, accelerator) and sensor listing.' @('PCI Devices', 'Hardware Sensors') }
+    if ($tables.Contains('PCI Devices') -or $tables.Contains('Sensors Not Normal')) { & $addSection 'appendix' 'Appendix: PCI devices and sensor exceptions' 'PCI devices (storage, network, GPU, accelerator) and any sensor not reporting normal. The full sensor list is in the Excel workbook.' @('PCI Devices', 'Sensors Not Normal') }
 
     & $add "<!DOCTYPE html><html lang=""en""><head><meta charset=""utf-8""><meta name=""viewport"" content=""width=device-width,initial-scale=1"">"
     & $add "<title>$(& $h $title) - $($now.ToString('yyyy-MM-dd'))</title><style>$(Get-VhCss)$(Get-VhAsBuiltCss)</style></head><body class=""doc"">"
@@ -274,7 +282,10 @@ function Export-VhAsBuiltWorkbook {
             Returns the path written.
     #>
     param([Parameter(Mandatory)]$Inventory, [Parameter(Mandatory)][hashtable]$Settings, [Parameter(Mandatory)][string]$Folder)
-    $tables = Get-VhAsBuiltTable -Inventory $Inventory -Settings $Settings
+    $all = Get-VhAsBuiltTable -Inventory $Inventory -Settings $Settings
+    # Subsets made for the printed document; the workbook carries the full lists instead
+    $tables = [ordered]@{}
+    foreach ($k in $all.Keys) { if ($k -notin 'Local Disks', 'Sensors Not Normal') { $tables[$k] = $all[$k] } }
     $useExcel = $Settings.AsBuilt -and $Settings.AsBuilt.Excel -and (Get-Module -ListAvailable -Name ImportExcel)
     if ($useExcel) {
         Import-Module ImportExcel -ErrorAction Stop

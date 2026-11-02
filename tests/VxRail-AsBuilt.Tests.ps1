@@ -54,6 +54,42 @@ Describe 'VxRail Manager client' {
         $v.Errors[0] | Should -Match 'callhome'
     }
 
+    It 'enumerates arrays that Windows PowerShell 5.1 emits as a single object' {
+        Mock -ModuleName VsphereHealth Invoke-RestMethod {
+            if ($Uri -like '*/v1/hosts') { Write-Output -NoEnumerate @([pscustomobject]@{ sn = 'A'; hostname = 'h1' }, [pscustomobject]@{ sn = 'B'; hostname = 'h2' }) }
+            elseif ($Uri -like '*/v1/system') { [pscustomobject]@{ version = '8.0'; health = 'Healthy'; number_of_host = 2 } }
+        }
+        $v = Get-VhVxRailInventory -Manager 'vxm.test' -Credential $cred
+        @($v.Nodes).Count | Should -Be 2
+        $v.Nodes.Hostname | Should -Be @('h1', 'h2')
+    }
+
+    It 'keeps numeric zero values such as slot 0' {
+        Mock -ModuleName VsphereHealth Invoke-RestMethod {
+            if ($Uri -like '*/v1/hosts') { @([pscustomobject]@{ sn = 'A'; hostname = 'h1'; disks = @([pscustomobject]@{ enclosure = 0; slot = 0; disk_state = 'OK' }) }) }
+            elseif ($Uri -like '*/v1/system') { [pscustomobject]@{ version = '8.0'; health = 'Healthy'; number_of_host = 1 } }
+        }
+        $v = Get-VhVxRailInventory -Manager 'vxm.test' -Credential $cred
+        $v.Disks[0].Slot | Should -Be '0'
+        $v.Disks[0].Enclosure | Should -Be '0'
+    }
+
+    It 'flags a reachable VxRail Manager that returns no node data' {
+        Mock -ModuleName VsphereHealth Invoke-RestMethod {
+            if ($Uri -like '*/v1/system') { [pscustomobject]@{ version = '8.0'; health = 'Healthy'; number_of_host = 4 } }
+            else { $null }
+        }
+        $v = Get-VhVxRailInventory -Manager 'vxm.test' -Credential $cred -Cluster 'C1'
+        $inv = Import-VhInventoryJson $samplePath
+        $inv.VxRail = @($v)
+        $r = Invoke-VhHealthCheck -Inventory $inv -Settings $settings | Where-Object Id -eq 'VXR-001'
+        $r.Status | Should -Be 'Finding'
+        $r.Severity | Should -Be 'Warning'
+        $r.Rows[0].NodesReturned | Should -Be 0
+        ($inv.VxRail | ForEach-Object Nodes) | Should -BeNullOrEmpty
+        ((Invoke-VhHealthCheck -Inventory $inv -Settings $settings) | Where-Object Id -eq 'VXR-003').Status | Should -Be 'Pass'
+    }
+
     It 'prefers Settings.VxRail.Managers over the VxRail-IP attribute' {
         $s = Import-VhSettings (Join-Path (Split-Path $PSScriptRoot -Parent) 'config/Settings.sample.psd1')
         $s.VxRail.Managers = @{ 'DR-VxRail-01' = 'override.corp.local' }

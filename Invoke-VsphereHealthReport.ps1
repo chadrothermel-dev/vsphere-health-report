@@ -127,7 +127,7 @@ try {
     if ($errors) { Write-Warning ("Checks with errors: " + (($errors | ForEach-Object { "$($_.Id): $($_.Error)" }) -join '; ')) }
     Write-Host "Report: $($paths.Folder)" -ForegroundColor Green
     if ($Open -or $settings.Report.OpenWhenDone) {
-        foreach ($p in @($paths['Html'], $paths['AsBuilt'])) { if ($p) { Invoke-Item $p } }
+        foreach ($p in @($paths.Html, $paths.AsBuilt)) { if ($p) { Invoke-Item $p } }
     }
     $paths
 }
