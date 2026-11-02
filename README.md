@@ -79,7 +79,7 @@ Register-ScheduledTask -TaskName 'vSphere Health Report' -Action $action -Trigge
 |---|---|
 | PowerShell | 7.2+ (recommended) or Windows PowerShell 5.1 |
 | PowerCLI | `VCF.PowerCLI` 9.x or `VMware.PowerCLI` 13.x (both provide `VMware.VimAutomation.Core`) |
-| vCenter Server | 8.0 (U1–U3) and 9.0. Older versions mostly work but aren't targeted |
+| vCenter Server | 8.0 (U1–U3) and 9.0 are the targets. 7.0 is collected and checked too, so out-of-support estates get flagged for upgrade (image/ESA detection needs 7.0+/8.0+) |
 | vCenter role | **Read-only** at the vCenter root (propagate). Seeing *other users'* sessions (VC-002) also needs `Sessions.TerminateSession`; without it that check just returns fewer rows |
 
 The script never changes anything in vCenter. PowerCLI settings are applied with `-Scope Session` only.
@@ -94,8 +94,8 @@ The script never changes anything in vCenter. PowerCLI settings are applied with
 | ID | Check | Applies to |
 |---|---|---|
 | LIC-001 | Assets on evaluation licenses | 8, 9 |
-| LIC-002 | License keys expired / expiring | 8 |
-| LIC-003 | License keys over capacity | 8 |
+| LIC-002 | License keys expired / expiring | 7, 8 |
+| LIC-003 | License keys over capacity | 7, 8 |
 | LIC-004 | Core entitlement shortfall (needs `PurchasedCores`) | 8, 9 |
 | LIC-005 | vSAN raw TiB above entitlement | 8, 9 |
 | LIC-006 | VCF 9 license usage report due (180-day cycle) | 9 |
@@ -230,7 +230,7 @@ tests/                           Pester tests
 ## Development
 
 ```powershell
-Invoke-Pester .\tests                                       # 33 tests, no vCenter needed
+Invoke-Pester .\tests                                       # 34 tests, no vCenter needed
 .\samples\New-SampleInventory.ps1 | Set-Content .\samples\sample-inventory.json
 .\Invoke-VsphereHealthReport.ps1 -Server vcsa01 -SaveInventory   # capture a real inventory to replay later
 ```

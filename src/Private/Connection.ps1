@@ -27,7 +27,7 @@ function Connect-VhServer {
 
     # Session scope only - never changes the user's persistent PowerCLI config
     $null = Set-PowerCLIConfiguration -Scope Session -InvalidCertificateAction $InvalidCertificateAction `
-        -ParticipateInCeip $false -DefaultVIServerMode Multiple -Confirm:$false
+        -DefaultVIServerMode Multiple -Confirm:$false
 
     if (-not $Credential -and $CredentialFile) {
         if (-not (Test-Path $CredentialFile)) { throw "Credential file not found: $CredentialFile" }

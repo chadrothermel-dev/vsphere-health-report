@@ -15,7 +15,7 @@ function Register-VhCheck {
         [Parameter(Mandatory)][ValidateSet('Info', 'Warning', 'Critical')][string]$Severity,
         [Parameter(Mandatory)][string]$Description,
         [string]$Remediation = '',
-        [string[]]$AppliesTo = @('8', '9'),
+        [string[]]$AppliesTo = @(),          # major versions; empty = all
         [Parameter(Mandatory)][scriptblock]$Script
     )
     $script:HealthChecks.Add([pscustomobject]@{
@@ -62,7 +62,7 @@ function Invoke-VhHealthCheck {
             $result.Status = 'Skipped'; $result.Severity = 'Pass'
             [pscustomobject]$result; continue
         }
-        if (-not ($majors | Where-Object { $_ -in $check.AppliesTo })) {
+        if (@($check.AppliesTo).Count -and -not ($majors | Where-Object { $_ -in $check.AppliesTo })) {
             $result.Status = 'NotApplicable'
             [pscustomobject]$result; continue
         }

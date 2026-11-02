@@ -13,7 +13,7 @@ Register-VhCheck -Id 'LIC-002' -Category 'Licensing' -Severity 'Warning' `
     -Title 'License keys expired or expiring soon' `
     -Description 'Subscription keys carry an end date. An expired key blocks new host connections and vSAN/feature use.' `
     -Remediation 'Renew the subscription in the Broadcom Support Portal and replace the key before the expiration date.' `
-    -AppliesTo '8' `
+    -AppliesTo '6', '7', '8' `
     -Script {
     param($Inventory, $Settings)
     $warn = [int]$Settings.Licensing.ExpiryWarningDays
@@ -34,7 +34,7 @@ Register-VhCheck -Id 'LIC-003' -Category 'Licensing' -Severity 'Critical' `
     -Title 'License keys over capacity' `
     -Description 'A key is consuming more units (cores or CPUs) than it provides. vCenter raises a compliance alarm and the estate is out of contract.' `
     -Remediation 'Add capacity to the subscription or move hosts to a key with free capacity.' `
-    -AppliesTo '8' `
+    -AppliesTo '6', '7', '8' `
     -Script {
     param($Inventory, $Settings)
     $Inventory.Licenses | Where-Object { -not $_.IsEval -and $_.Total -gt 0 -and $_.Used -gt $_.Total } | ForEach-Object {

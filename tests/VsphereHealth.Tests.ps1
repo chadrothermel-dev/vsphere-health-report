@@ -70,6 +70,18 @@ Describe 'Health checks' {
         ($r | Where-Object Id -eq 'LIC-006').Status | Should -Not -Be 'NotApplicable'
     }
 
+    It 'flags an unsupported vCenter 7.0-only estate instead of skipping every check' {
+        $inv7 = Import-VhInventoryJson (Join-Path (Split-Path $PSScriptRoot -Parent) 'samples/sample-inventory.json')
+        $inv7.vCenters = @([pscustomobject]@{ Name = 'vc7'; Version = '7.0.3'; Build = '1' })
+        $inv7.Hosts = @($inv7.Hosts | Where-Object { $_.Version -like '7.*' })
+        $r = @(Invoke-VhHealthCheck -Inventory $inv7 -Settings $settings)
+        ($r | Where-Object Id -eq 'LCM-001').Status | Should -Be 'Finding'
+        ($r | Where-Object Id -eq 'LIC-003').Status | Should -Not -Be 'NotApplicable'
+        @($r | Where-Object Status -eq 'NotApplicable').Count | Should -BeLessThan 3
+        $module = Get-Module VsphereHealth
+        (& $module { param($x) Get-VhHealthScore -Results $x } $r) | Should -BeLessThan 100
+    }
+
     It 'excludes vCLS agent VMs by default' {
         $results | ForEach-Object { $_.Rows } | Where-Object { $_.PSObject.Properties['VM'] -and $_.VM -like 'vCLS*' } | Should -BeNullOrEmpty
     }
