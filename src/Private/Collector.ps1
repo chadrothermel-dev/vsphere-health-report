@@ -17,7 +17,13 @@ function Get-VhInventory {
             Collects a flattened inventory from one connected vCenter Server.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Server)
+    param(
+        [Parameter(Mandatory)]$Server,
+        # Collect the full as-built hardware inventory per host (slower)
+        [switch]$IncludeHardware,
+        # Also use esxcli for NIC driver/firmware versions and the BMC IP (slowest)
+        [switch]$UseEsxcli
+    )
 
     $vc = $Server.Name
     Write-Verbose "[$vc] Collecting service content"
@@ -26,7 +32,11 @@ function Get-VhInventory {
 
     # ---- Clusters ---------------------------------------------------------
     Write-Verbose "[$vc] Clusters"
-    $clusterViews = @(Get-View -Server $Server -ViewType ClusterComputeResource -Property Name, Parent, ConfigurationEx, Summary, Host, LifecycleManaged)
+    $clusterViews = @(Get-View -Server $Server -ViewType ClusterComputeResource -Property Name, Parent, ConfigurationEx, Summary, Host, LifecycleManaged, CustomValue)
+
+    # Custom attribute names; VxRail stamps its clusters with 'VxRail-IP' (the VxRail Manager address)
+    $fieldNames = @{}
+    Get-VhSafe { foreach ($f in (Get-View -Server $Server $si.Content.CustomFieldsManager).Field) { $fieldNames[[string]$f.Key] = $f.Name } }
     $clusterByMoRef = @{}
     foreach ($c in $clusterViews) { $clusterByMoRef[$c.MoRef.ToString()] = $c.Name }
 
@@ -56,6 +66,7 @@ function Get-VhInventory {
     $clusters = foreach ($c in $clusterViews) {
         $cfg = $c.ConfigurationEx
         $vsanEnabled = [bool](Get-VhSafe { $cfg.VsanConfigInfo.Enabled } $false)
+        $vxrIp = [string](@($c.CustomValue) | Where-Object { $_ -and $fieldNames[[string]$_.Key] -eq 'VxRail-IP' } | Select-Object -First 1).Value
         [pscustomobject]@{
             vCenter                 = $vc
             Name                    = $c.Name
@@ -74,14 +85,65 @@ function Get-VhInventory {
             VsanEsa                 = [bool](Get-VhSafe { $cfg.VsanConfigInfo.VsanEsaEnabled } $false)
             ImageManaged            = [bool](Get-VhSafe { $c.LifecycleManaged } $false)
             HostProfile             = [string]$hostProfiles[$c.MoRef.ToString()]
+            IsVxRail                = [bool]$vxrIp
+            VxRailManager           = $vxrIp
+            HAAdmissionPolicy       = [string](Get-VhSafe { $cfg.DasConfig.AdmissionControlPolicy.GetType().Name -replace '^ClusterFailover', '' -replace 'AdmissionControlPolicy$', '' } '')
+            HAIsolationResponse     = [string](Get-VhSafe { $cfg.DasConfig.DefaultVmSettings.IsolationResponse } '')
+            HAVmMonitoring          = [string](Get-VhSafe { $cfg.DasConfig.VmMonitoring } '')
+            DrsMigrationThreshold   = [int](Get-VhSafe { $cfg.DrsConfig.VmotionRate } 0)
+        }
+    }
+
+    # ---- Distributed switches / port groups -------------------------------
+    Write-Verbose "[$vc] Distributed switches"
+    $dvsNames = @{}; $dvsByUuid = @{}; $dvpgNames = @{}
+    $dvSwitches = foreach ($s in (Get-VhSafe { Get-View -Server $Server -ViewType DistributedVirtualSwitch -Property Name, Uuid, Config, Summary } @())) {
+        $dvsNames[$s.MoRef.ToString()] = $s.Name
+        $dvsByUuid[[string]$s.Uuid] = $s.Name
+        [pscustomobject]@{
+            vCenter   = $vc
+            Name      = $s.Name
+            Version   = [string](Get-VhSafe { $s.Config.ProductInfo.Version } '')
+            Mtu       = [int](Get-VhSafe { $s.Config.MaxMtu } 0)
+            Uplinks   = @(Get-VhSafe { $s.Config.UplinkPortPolicy.UplinkPortName } @()).Count
+            Hosts     = @(Get-VhSafe { $s.Summary.HostMember } @()).Count
+            Nioc      = [bool](Get-VhSafe { $s.Config.NetworkResourceManagementEnabled } $false)
+            Discovery = [string](Get-VhSafe { "$($s.Config.LinkDiscoveryProtocolConfig.Protocol)/$($s.Config.LinkDiscoveryProtocolConfig.Operation)" } '')
+        }
+    }
+    $dvPortGroups = foreach ($pg in (Get-VhSafe { Get-View -Server $Server -ViewType DistributedVirtualPortgroup -Property Name, Key, Config, Vm } @())) {
+        $dvpgNames[[string]$pg.Key] = $pg.Name
+        if ($pg.Config.Uplink) { continue }
+        $sec = Get-VhSafe { $pg.Config.DefaultPortConfig.SecurityPolicy }
+        $vlan = Get-VhSafe { $pg.Config.DefaultPortConfig.Vlan }
+        $vlanText = ''
+        if ($vlan -and $vlan.PSObject.Properties['VlanId']) {
+            $id = $vlan.VlanId
+            $vlanText = if ($id -is [array]) { ($id | ForEach-Object { "$($_.Start)-$($_.End)" }) -join ',' } else { [string]$id }
+        }
+        elseif ($vlan -and $vlan.PSObject.Properties['PvlanId']) { $vlanText = "PVLAN $($vlan.PvlanId)" }
+        [pscustomobject]@{
+            vCenter          = $vc
+            Name             = $pg.Name
+            Switch           = [string]$dvsNames[$pg.Config.DistributedVirtualSwitch.ToString()]
+            VlanId           = $vlanText
+            BindingType      = [string]$pg.Config.Type
+            NumPorts         = [int]$pg.Config.NumPorts
+            AutoExpand       = [bool]$pg.Config.AutoExpand
+            ConnectedVms     = @($pg.Vm).Count
+            AllowPromiscuous = [bool](Get-VhSafe { $sec.AllowPromiscuous.Value } $false)
+            ForgedTransmits  = [bool](Get-VhSafe { $sec.ForgedTransmits.Value } $false)
+            MacChanges       = [bool](Get-VhSafe { $sec.MacChanges.Value } $false)
         }
     }
 
     # ---- Hosts ------------------------------------------------------------
     Write-Verbose "[$vc] Hosts"
-    $hostViews = @(Get-View -Server $Server -ViewType HostSystem -Property Name, Parent, Runtime, Summary, OverallStatus, ConfigIssue,
-        Hardware.CpuInfo, Config.Product, Config.LockdownMode, Config.PowerSystemInfo, Config.StorageDevice.MultipathInfo,
-        Config.Network.Vswitch, Config.Network.Portgroup, Capability, ConfigManager)
+    $hostProps = @('Name', 'Parent', 'Runtime', 'Summary', 'OverallStatus', 'ConfigIssue',
+        'Hardware.CpuInfo', 'Config.Product', 'Config.LockdownMode', 'Config.PowerSystemInfo', 'Config.StorageDevice.MultipathInfo',
+        'Config.Network.Vswitch', 'Config.Network.Portgroup', 'Capability', 'ConfigManager')
+    if ($IncludeHardware) { $hostProps += $script:VhHardwareHostProperties }
+    $hostViews = @(Get-View -Server $Server -ViewType HostSystem -Property $hostProps)
     $hostByMoRef = @{}
     $hostCluster = @{}
     $hosts = foreach ($h in $hostViews) {
@@ -142,12 +204,17 @@ function Get-VhInventory {
             UefiSecureBoot     = [bool](Get-VhSafe { $h.Capability.UefiSecureBoot } $false)
             VSwitches          = @($h.Config.Network.Vswitch | ForEach-Object {
                     $sec = $_.Spec.Policy.Security
-                    [pscustomobject]@{ Name = $_.Name; AllowPromiscuous = [bool]$sec.AllowPromiscuous; ForgedTransmits = [bool]$sec.ForgedTransmits; MacChanges = [bool]$sec.MacChanges }
+                    [pscustomobject]@{
+                        Name = $_.Name; Mtu = [int]$_.Mtu
+                        Uplinks = @(@($_.Pnic) | Where-Object { $_ } | ForEach-Object { $_ -replace '^.*PhysicalNic-', '' })
+                        AllowPromiscuous = [bool]$sec.AllowPromiscuous; ForgedTransmits = [bool]$sec.ForgedTransmits; MacChanges = [bool]$sec.MacChanges
+                    }
                 })
             PortGroups         = @($h.Config.Network.Portgroup | ForEach-Object {
                     $sec = $_.Spec.Policy.Security
-                    [pscustomobject]@{ Name = $_.Spec.Name; vSwitch = $_.Spec.VswitchName; AllowPromiscuous = $sec.AllowPromiscuous; ForgedTransmits = $sec.ForgedTransmits; MacChanges = $sec.MacChanges }
+                    [pscustomobject]@{ Name = $_.Spec.Name; vSwitch = $_.Spec.VswitchName; VlanId = [int]$_.Spec.VlanId; AllowPromiscuous = $sec.AllowPromiscuous; ForgedTransmits = $sec.ForgedTransmits; MacChanges = $sec.MacChanges }
                 })
+            Hardware           = if ($IncludeHardware) { Get-VhHostHardware -HostView $h -Server $Server -DvsNames $dvsByUuid -DvPortGroupNames $dvpgNames -UseEsxcli:$UseEsxcli } else { $null }
         }
     }
 
@@ -242,27 +309,6 @@ function Get-VhInventory {
         }
     }
 
-    # ---- Distributed port groups -----------------------------------------
-    Write-Verbose "[$vc] Distributed port groups"
-    $dvsNames = @{}
-    Get-VhSafe { foreach ($s in (Get-View -Server $Server -ViewType DistributedVirtualSwitch -Property Name)) { $dvsNames[$s.MoRef.ToString()] = $s.Name } }
-    $dvPortGroups = foreach ($pg in (Get-VhSafe { Get-View -Server $Server -ViewType DistributedVirtualPortgroup -Property Name, Config, Vm } @())) {
-        if ($pg.Config.Uplink) { continue }
-        $sec = Get-VhSafe { $pg.Config.DefaultPortConfig.SecurityPolicy }
-        [pscustomobject]@{
-            vCenter          = $vc
-            Name             = $pg.Name
-            Switch           = [string]$dvsNames[$pg.Config.DistributedVirtualSwitch.ToString()]
-            BindingType      = [string]$pg.Config.Type
-            NumPorts         = [int]$pg.Config.NumPorts
-            AutoExpand       = [bool]$pg.Config.AutoExpand
-            ConnectedVms     = @($pg.Vm).Count
-            AllowPromiscuous = [bool](Get-VhSafe { $sec.AllowPromiscuous.Value } $false)
-            ForgedTransmits  = [bool](Get-VhSafe { $sec.ForgedTransmits.Value } $false)
-            MacChanges       = [bool](Get-VhSafe { $sec.MacChanges.Value } $false)
-        }
-    }
-
     # ---- Triggered alarms -------------------------------------------------
     Write-Verbose "[$vc] Alarms"
     $alarmNames = @{}
@@ -330,7 +376,9 @@ function Get-VhInventory {
         Hosts        = @($hosts)
         Datastores   = @($datastores)
         Vms          = @($vms)
+        DvSwitches   = @($dvSwitches)
         DvPortGroups = @($dvPortGroups)
+        VxRail       = @()
         Alarms       = @($alarms)
         Sessions     = @($sessions)
         Licenses     = @($licenses)
@@ -341,7 +389,7 @@ function Get-VhInventory {
 function Merge-VhInventory {
     <# Combines per-vCenter inventories into one. #>
     param([Parameter(Mandatory)][object[]]$Inventory)
-    $props = 'vCenters', 'Clusters', 'Hosts', 'Datastores', 'Vms', 'DvPortGroups', 'Alarms', 'Sessions', 'Licenses', 'Assignments'
+    $props = 'vCenters', 'Clusters', 'Hosts', 'Datastores', 'Vms', 'DvSwitches', 'DvPortGroups', 'VxRail', 'Alarms', 'Sessions', 'Licenses', 'Assignments'
     $merged = [ordered]@{ CollectedAt = ($Inventory | Select-Object -First 1).CollectedAt }
     foreach ($p in $props) { $merged[$p] = @($Inventory | ForEach-Object { $_.$p } | Where-Object { $null -ne $_ }) }
     [pscustomobject]$merged
@@ -352,7 +400,7 @@ function Import-VhInventoryJson {
     param([Parameter(Mandatory)][string]$Path)
     $inv = Get-Content -Path $Path -Raw | ConvertFrom-Json
     # ConvertFrom-Json collapses single-element arrays and leaves dates as strings in 5.1
-    foreach ($p in 'vCenters', 'Clusters', 'Hosts', 'Datastores', 'Vms', 'DvPortGroups', 'Alarms', 'Sessions', 'Licenses', 'Assignments') {
+    foreach ($p in 'vCenters', 'Clusters', 'Hosts', 'Datastores', 'Vms', 'DvSwitches', 'DvPortGroups', 'VxRail', 'Alarms', 'Sessions', 'Licenses', 'Assignments') {
         if (-not $inv.PSObject.Properties[$p]) { $inv | Add-Member -NotePropertyName $p -NotePropertyValue @() }
         $inv.$p = @($inv.$p)
     }

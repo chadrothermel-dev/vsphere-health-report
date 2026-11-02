@@ -20,6 +20,10 @@
 .PARAMETER OutputPath
     Report output folder. Overrides Report.OutputPath.
 
+.PARAMETER ReportType
+    Health (daily findings), AsBuilt (full configuration and hardware document, incl. VxRail) or Both.
+    Defaults to Report.Type in the settings file.
+
 .PARAMETER SampleData
     Render from a saved inventory JSON instead of connecting (demo, testing, offline review).
 
@@ -36,6 +40,9 @@
     .\Invoke-VsphereHealthReport.ps1 -SampleData .\samples\sample-inventory.json -Open
 
 .EXAMPLE
+    .\Invoke-VsphereHealthReport.ps1 -Server vcsa01.corp.local -ReportType AsBuilt -Open
+
+.EXAMPLE
     # Store credentials once (DPAPI-encrypted for this user on this machine)
     Get-Credential | Export-Clixml .\config\vcenter.cred.xml
     .\Invoke-VsphereHealthReport.ps1 -ConfigPath .\config\Settings.prod.psd1
@@ -46,6 +53,8 @@ param(
     [pscredential]$Credential,
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'config/Settings.psd1'),
     [string]$OutputPath,
+    # Health = daily findings report; AsBuilt = full configuration + hardware document; Both
+    [ValidateSet('Health', 'AsBuilt', 'Both')][string]$ReportType,
     [string]$SampleData,
     [switch]$SaveInventory,
     [switch]$SendEmail,
@@ -58,6 +67,8 @@ Import-Module (Join-Path $PSScriptRoot 'src/VsphereHealth.psd1') -Force
 
 $settings = Import-VhSettings -Path $ConfigPath
 if ($OutputPath) { $settings.Report.OutputPath = $OutputPath }
+if (-not $ReportType) { $ReportType = if ($settings.Report.Type) { [string]$settings.Report.Type } else { 'Health' } }
+$asBuilt = $ReportType -in 'AsBuilt', 'Both'
 $outRoot = $settings.Report.OutputPath
 if (-not [IO.Path]::IsPathRooted($outRoot)) { $outRoot = Join-Path $PSScriptRoot $outRoot }
 
@@ -69,26 +80,42 @@ try {
         $inventory = Import-VhInventoryJson -Path (Resolve-Path $SampleData).Path
     }
     else {
+        if (-not $Credential -and $settings.Connection.CredentialFile) { $Credential = Import-Clixml -Path $settings.Connection.CredentialFile }
+        if (-not $Credential) { $Credential = Get-Credential -Message 'vCenter credentials' }
         $targets = if ($Server) { $Server } else { @($settings.Connection.Servers) }
-        $connections = @(Connect-VhServer -Server $targets -Credential $Credential -CredentialFile $settings.Connection.CredentialFile `
+        $connections = @(Connect-VhServer -Server $targets -Credential $Credential `
                 -AllLinked:([bool]$settings.Connection.AllLinked) -InvalidCertificateAction $settings.Connection.InvalidCertificateAction)
+        $useEsxcli = $asBuilt -and $settings.AsBuilt -and [bool]$settings.AsBuilt.UseEsxcli
         $perVc = foreach ($c in $connections) {
-            Write-Host "Collecting inventory from $($c.Name) (vCenter $($c.Version))" -ForegroundColor Cyan
-            Get-VhInventory -Server $c
+            Write-Host "Collecting inventory from $($c.Name) (vCenter $($c.Version))$(if ($asBuilt) { ' with hardware detail' })" -ForegroundColor Cyan
+            Get-VhInventory -Server $c -IncludeHardware:$asBuilt -UseEsxcli:$useEsxcli
         }
         $inventory = Merge-VhInventory -Inventory @($perVc)
+
+        # VxRail Manager API (clusters tagged with the VxRail-IP attribute, or listed in Settings.VxRail.Managers)
+        $vx = $settings.VxRail
+        if ($vx -and $vx.Enabled) {
+            $vxCred = if ($vx.CredentialFile) { Import-Clixml -Path $vx.CredentialFile } else { $Credential }
+            $skip = [bool]$vx.SkipCertificateCheck -or $settings.Connection.InvalidCertificateAction -eq 'Ignore'
+            $inventory.VxRail = @(foreach ($t in @(Get-VhVxRailTarget -Inventory $inventory -Settings $settings)) {
+                    Write-Host "Querying VxRail Manager $($t.Manager) (cluster $($t.Cluster))" -ForegroundColor Cyan
+                    Get-VhVxRailInventory -Manager $t.Manager -Credential $vxCred -Cluster $t.Cluster -vCenter $t.vCenter `
+                        -SkipCertificateCheck:$skip -IncludeIdrac:([bool]$vx.IncludeIdrac) -KeepRaw:$SaveInventory
+                })
+        }
     }
 
     Write-Host 'Running health checks' -ForegroundColor Cyan
     $results = @(Invoke-VhHealthCheck -Inventory $inventory -Settings $settings)
     $sw.Stop()
 
-    $paths = Export-VhReport -Results $results -Inventory $inventory -Settings $settings -OutputPath $outRoot -Duration $sw.Elapsed -ToolVersion $toolVersion
+    $paths = Export-VhReport -Results $results -Inventory $inventory -Settings $settings -OutputPath $outRoot -Duration $sw.Elapsed -ToolVersion $toolVersion -ReportType $ReportType
     if ($SaveInventory) {
-        $inventory | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $paths.Folder 'inventory.json') -Encoding UTF8
+        # Includes raw VxRail API responses - useful to validate field names on a new VxRail release
+        $inventory | ConvertTo-Json -Depth 12 | Set-Content -Path (Join-Path $paths.Folder 'inventory.json') -Encoding UTF8
     }
 
-    if ($SendEmail -or $settings.Email.Enabled) {
+    if (($SendEmail -or $settings.Email.Enabled) -and $ReportType -ne 'AsBuilt') {
         Write-Host 'Sending email summary' -ForegroundColor Cyan
         Send-VhReport -Results $results -Settings $settings -HtmlPath $paths.Html
     }
@@ -99,7 +126,9 @@ try {
     $errors = @($results | Where-Object Status -eq 'Error')
     if ($errors) { Write-Warning ("Checks with errors: " + (($errors | ForEach-Object { "$($_.Id): $($_.Error)" }) -join '; ')) }
     Write-Host "Report: $($paths.Folder)" -ForegroundColor Green
-    if (($Open -or $settings.Report.OpenWhenDone) -and $paths.Html) { Invoke-Item $paths.Html }
+    if ($Open -or $settings.Report.OpenWhenDone) {
+        foreach ($p in @($paths['Html'], $paths['AsBuilt'])) { if ($p) { Invoke-Item $p } }
+    }
     $paths
 }
 finally {

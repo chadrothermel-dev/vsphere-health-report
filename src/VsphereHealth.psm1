@@ -32,4 +32,9 @@ Export-ModuleMember -Function @(
     'ConvertTo-VhHtmlReport'
     'Export-VhReport'
     'Send-VhReport'
+    'Get-VhVxRailInventory'
+    'Get-VhVxRailTarget'
+    'Get-VhAsBuiltTable'
+    'ConvertTo-VhAsBuiltHtml'
+    'Export-VhAsBuiltWorkbook'
 )

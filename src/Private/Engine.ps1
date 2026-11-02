@@ -9,7 +9,7 @@ function Register-VhCheck {
     #>
     param(
         [Parameter(Mandatory)][string]$Id,
-        [Parameter(Mandatory)][ValidateSet('Licensing', 'Lifecycle', 'vCenter', 'Clusters', 'Hosts', 'Storage', 'Virtual Machines', 'Networking')]
+        [Parameter(Mandatory)][ValidateSet('Licensing', 'Lifecycle', 'vCenter', 'Clusters', 'Hosts', 'Hardware', 'VxRail', 'Storage', 'Virtual Machines', 'Networking')]
         [string]$Category,
         [Parameter(Mandatory)][string]$Title,
         [Parameter(Mandatory)][ValidateSet('Info', 'Warning', 'Critical')][string]$Severity,

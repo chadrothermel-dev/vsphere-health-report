@@ -138,8 +138,9 @@ function ConvertTo-VhHtmlTable {
     $sb = [Text.StringBuilder]::new()
     [void]$sb.Append('<div class="tbl"><table class="data"><thead><tr>')
     foreach ($c in $cols) {
-        # PascalCase -> words (EndOfGeneralSupport -> End Of General Support); keeps acronyms like VMs, TiB, vCenter
-        $label = $c -creplace '(?<=[a-z])(?=[A-Z])', ' ' -creplace '(?<=[A-Z])(?=[A-Z][a-z])', ' '
+        # PascalCase -> words (EndOfGeneralSupport -> End Of General Support). A single leading
+        # lowercase letter is a product prefix (vCenter, vCPU, vSAN, iDRAC), so it is not split off.
+        $label = $c -creplace '(?<=[a-z])(?<!^[a-z])(?=[A-Z])', ' ' -creplace '(?<=[A-Z])(?=[A-Z][a-z])', ' '
         [void]$sb.Append("<th>$(ConvertTo-VhHtmlText $label)</th>")
     }
     [void]$sb.Append('</tr></thead><tbody>')
@@ -273,7 +274,7 @@ function ConvertTo-VhHtmlReport {
     & $add "</div></div>"
 
     # ---- Category summary ----
-    $cats = 'Licensing', 'Lifecycle', 'vCenter', 'Clusters', 'Hosts', 'Storage', 'Virtual Machines', 'Networking'
+    $cats = 'Licensing', 'Lifecycle', 'vCenter', 'Clusters', 'Hosts', 'Hardware', 'VxRail', 'Storage', 'Virtual Machines', 'Networking'
     & $add "<div class=""card"" style=""margin-top:16px""><h2>Summary by area</h2><div class=""tbl""><table><thead><tr><th>Area</th><th>Critical</th><th>Warning</th><th>Advisory</th><th>Passed</th></tr></thead><tbody>"
     foreach ($c in $cats) {
         $cr = @($Results | Where-Object Category -eq $c)

@@ -27,15 +27,17 @@ Register-VhCheck -Id 'LCM-001' -Category 'Lifecycle' -Severity 'Critical' `
 Register-VhCheck -Id 'LCM-002' -Category 'Lifecycle' -Severity 'Warning' `
     -Title 'Mixed ESXi builds within a cluster' `
     -Description 'Hosts in the same cluster should run the same build. Mixed builds limit vMotion/EVC, VM hardware versions and vLCM remediation.' `
-    -Remediation 'Remediate the cluster against its vLCM image so every host matches.' `
+    -Remediation 'Remediate the cluster against its vLCM image so every host matches. VxRail clusters: run the upgrade from VxRail Manager, never from vCenter Lifecycle Manager directly.' `
     -Script {
     param($Inventory, $Settings)
+    $vxr = @{}; foreach ($c in $Inventory.Clusters) { $vxr["$($c.vCenter)|$($c.Name)"] = [bool](Get-VhProp $c 'IsVxRail' $false) }
     $Inventory.Hosts | Where-Object { $_.Cluster -and $_.Build } | Group-Object vCenter, Cluster | ForEach-Object {
         $builds = @($_.Group | Group-Object Build)
         if ($builds.Count -gt 1) {
             [pscustomobject]@{
                 vCenter = $_.Group[0].vCenter; Cluster = $_.Group[0].Cluster; Hosts = $_.Count
                 Builds = ($builds | ForEach-Object { "$($_.Group[0].Version) build $($_.Name) ($($_.Count))" }) -join '; '
+                ManagedBy = if ($vxr["$($_.Group[0].vCenter)|$($_.Group[0].Cluster)"]) { 'VxRail Manager' } else { 'vLCM' }
             }
         }
     }
@@ -44,11 +46,16 @@ Register-VhCheck -Id 'LCM-002' -Category 'Lifecycle' -Severity 'Warning' `
 Register-VhCheck -Id 'LCM-003' -Category 'Lifecycle' -Severity 'Warning' `
     -Title 'Clusters managed with vLCM baselines instead of images' `
     -Description 'Baseline (VUM-style) lifecycle management is deprecated in vSphere 8 and removed in vSphere 9. Baseline-managed clusters must be converted to an image before upgrading to ESXi 9.' `
-    -Remediation 'Cluster > Updates > Image > Manage with a single image. Check the image compliance report before switching; the change cannot be undone.' `
+    -Remediation 'Cluster > Updates > Image > Manage with a single image. Check the image compliance report before switching; the change cannot be undone. VxRail clusters: lifecycle is owned by VxRail Manager; switch to vLCM mode from VxRail Manager (not the vCenter Updates tab) and follow the VxRail upgrade path for vSphere 9.' `
     -Script {
     param($Inventory, $Settings)
     $Inventory.Clusters | Where-Object { -not $_.ImageManaged -and $_.NumHosts -gt 0 } | ForEach-Object {
-        [pscustomobject]@{ vCenter = $_.vCenter; Cluster = $_.Name; Datacenter = $_.Datacenter; Hosts = $_.NumHosts; Lifecycle = 'Baselines' }
+        $isVxr = [bool](Get-VhProp $_ 'IsVxRail' $false)
+        [pscustomobject]@{
+            Severity = if ($isVxr) { 'Info' } else { 'Warning' }
+            vCenter = $_.vCenter; Cluster = $_.Name; Datacenter = $_.Datacenter; Hosts = $_.NumHosts
+            Lifecycle = if ($isVxr) { 'VxRail Manager (legacy mode)' } else { 'Baselines' }
+        }
     }
 }
 

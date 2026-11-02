@@ -11,13 +11,22 @@ function Export-VhReport {
         [Parameter(Mandatory)][hashtable]$Settings,
         [Parameter(Mandatory)][string]$OutputPath,
         [timespan]$Duration = [timespan]::Zero,
-        [string]$ToolVersion = '1.0.0'
+        [string]$ToolVersion = '1.0.0',
+        [ValidateSet('Health', 'AsBuilt', 'Both')][string]$ReportType = 'Health'
     )
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $dir = Join-Path $OutputPath "vSphereHealth-$stamp"
     $null = New-Item -ItemType Directory -Path $dir -Force
     $formats = @($Settings.Report.Formats)
     $out = [ordered]@{ Folder = $dir }
+
+    if ($ReportType -in 'AsBuilt', 'Both') {
+        $path = Join-Path $dir 'vSphereAsBuilt.html'
+        ConvertTo-VhAsBuiltHtml -Inventory $Inventory -Settings $Settings -ToolVersion $ToolVersion | Set-Content -Path $path -Encoding UTF8
+        $out.AsBuilt = $path
+        $out.AsBuiltData = Export-VhAsBuiltWorkbook -Inventory $Inventory -Settings $Settings -Folder $dir
+    }
+    if ($ReportType -eq 'AsBuilt') { $formats = @($formats | Where-Object { $_ -ne 'Html' }) }
 
     if ('Html' -in $formats) {
         $path = Join-Path $dir 'vSphereHealthReport.html'

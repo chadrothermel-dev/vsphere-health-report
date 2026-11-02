@@ -12,6 +12,31 @@
         OpenWhenDone = $false
         KeepReports  = 30                        # delete report folders older than N days (0 = keep all)
         ShowPassed   = $true                     # list passed checks at the end of the report
+        # Health | AsBuilt | Both   (AsBuilt/Both collect full hardware and VxRail data - slower)
+        Type         = 'Health'
+    }
+
+    AsBuilt = @{
+        Title            = 'vSphere As-Built Report'
+        PreparedBy       = 'Infrastructure Engineering'
+        DocumentVersion  = '1.0'
+        # esxcli adds NIC driver/firmware versions and BMC/iDRAC IP; slower and needs more than read-only [verify privileges]
+        UseEsxcli        = $true
+        IncludeVmInventory = $true
+        # Write an .xlsx workbook when the ImportExcel module is installed (CSV files otherwise)
+        Excel            = $true
+    }
+
+    VxRail = @{
+        Enabled              = $true             # query VxRail Manager for clusters that have one
+        # Override / add VxRail Managers: cluster name -> VxRail Manager FQDN or IP.
+        # By default the vCenter cluster attribute 'VxRail-IP' is used.
+        Managers             = @{}
+        # PSCredential file for VxRail Manager (vCenter SSO account with a VxRail role). Empty = reuse vCenter credential.
+        CredentialFile       = ''
+        SkipCertificateCheck = $false            # only for self-signed VxRail Manager certificates
+        IncludeIdrac         = $true             # one extra call per node for the iDRAC IP
+        DiskEnduranceWarnPct = 20                # remaining SSD write endurance (%) warning threshold
     }
 
     Connection = @{
@@ -57,7 +82,7 @@
     }
 
     Exclusions = @{
-        VmNamePattern        = '^vCLS'            # regex, '' = none
+        VmNamePattern        = '^(vCLS|VxRail Manager)'   # regex, '' = none
         DatastoreNamePattern = ''
         SnapshotNamePattern  = ''
         HostNamePattern      = ''
